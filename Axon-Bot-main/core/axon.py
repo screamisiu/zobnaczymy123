@@ -59,7 +59,7 @@ class axon(commands.AutoShardedBot):
         await self.change_presence(status=discord.Status.dnd,
                                    activity=discord.Activity(
                                        type=discord.ActivityType.playing,
-                                       name='>help | >invite'))
+                                       name='>help'))
 
     async def send_raw(self, channel_id: int, content: str,
                        **kwargs) -> typing.Optional[discord.Message]:
