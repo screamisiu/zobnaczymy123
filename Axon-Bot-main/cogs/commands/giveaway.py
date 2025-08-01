@@ -124,8 +124,8 @@ class Giveaway(commands.Cog):
 
                     embed.set_thumbnail(url="https://cdn.discordapp.com/emojis/1267699529130709075.png")
                     embed.set_footer(text=f"Ended at")
-                    await message.edit(content="<a:Giveaway:1400865340841267311> **GIVEAWAY ENDED** <a:Giveaway:1400865340841267311>", embed=embed)
-                    await message.reply(f"<a:Giveaways:1400865340841267311> Congrats {winner}, you won **{giveaway[5]}!**, Hosted by <@{int(giveaway[3])}>")
+                    await message.edit(content="<a:Giveaway1:1400865340841267311> **GIVEAWAY ENDED** <a:Giveaway1:1400865340841267311>", embed=embed)
+                    await message.reply(f"<a:Giveaway1:1400865340841267311> Congrats {winner}, you won **{giveaway[5]}!**, Hosted by <@{int(giveaway[3])}>")
                     await self.cursor.execute("DELETE FROM Giveaway WHERE message_id = ? AND guild_id = ?", (message.id, message.guild.id))
                     await self.connection.commit()
 
@@ -206,8 +206,8 @@ class Giveaway(commands.Cog):
 
         ends = (datetime.datetime.now().timestamp() + converted)
 
-        embed = discord.Embed(title=f"<a:Giveaway:1400865340841267311> {prize}",
-                              description=f"Winner(s): **{winners}**\nReact with <a:Giveaway:1400865340841267311> to participate!\nEnds <t:{round(ends)}:R> (<t:{round(ends)}:f>)\n\nHosted by {ctx.author.mention}", color=0x000000)
+        embed = discord.Embed(title=f"<a:Giveaway1:1400865340841267311> {prize}",
+                              description=f"Winner(s): **{winners}**\nReact with <a:Giveaway1:1400865340841267311> to participate!\nEnds <t:{round(ends)}:R> (<t:{round(ends)}:f>)\n\nHosted by {ctx.author.mention}", color=0x000000)
 
         ends1 = datetime.datetime.utcnow() + datetime.timedelta(seconds=converted)
         ends_utc = ends1.replace(tzinfo=datetime.timezone.utc)
@@ -216,7 +216,7 @@ class Giveaway(commands.Cog):
         embed.set_thumbnail(url="https://cdn.discordapp.com/emojis/1267699441394126940.png")
         embed.set_footer(text=f"Ends at", icon_url=ctx.bot.user.avatar.url)
 
-        message = await ctx.send("<a:Giveaway:1400865340841267311> **GIVEAWAY** <a:Giveaway:1400865340841267311>", embed=embed)
+        message = await ctx.send("<a:Giveaway1:1400865340841267311> **GIVEAWAY** <a:Giveaway1:1400865340841267311>", embed=embed)
         try:
            await ctx.message.delete()
         except:
