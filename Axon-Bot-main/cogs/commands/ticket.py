@@ -3,28 +3,12 @@ from discord.ext import commands
 from discord import app_commands
 import asyncio
 import io
-import json
-import os
 
 EMOJI_DOT = "<a:BlueDot:1364125472539021352>"
-TICKET_CATEGORY_ID = 1336616593157001227  # Wstaw ID kategorii na tickety
+
+TICKET_CATEGORY_ID = 1336616593157001227  # tutaj wstaw ID kategorii, gdzie mają powstawać tickety
 
 ticket_counter = 0
-PANEL_DATA_FILE = "ticket_panel.json"  # Plik do przechowywania ID panelu
-
-def save_panel_data(channel_id, message_id):
-    data = {
-        "channel_id": channel_id,
-        "message_id": message_id
-    }
-    with open(PANEL_DATA_FILE, "w") as f:
-        json.dump(data, f)
-
-def load_panel_data():
-    if not os.path.exists(PANEL_DATA_FILE):
-        return None
-    with open(PANEL_DATA_FILE, "r") as f:
-        return json.load(f)
 
 class EmbedEditModal(discord.ui.Modal, title="Edit Ticket Embed"):
     def __init__(self, view):
@@ -90,22 +74,12 @@ class AddOptionModal(discord.ui.Modal, title="Add Ticket Option"):
 
 class TicketSetupView(discord.ui.View):
     def __init__(self, bot, author):
-        super().__init__(timeout=None)  # Nie timeoutuj, żeby można było korzystać długo
+        super().__init__(timeout=300)
         self.bot = bot
         self.author = author
         self.embed = discord.Embed(title="Ticket Panel", description="Select an option to open a ticket.", color=0x2B2D31)
         self.options = []
         self.channel = None
-        self.message = None  # Tu będziemy trzymać wiadomość panelu
-
-        # Załaduj istniejący panel z pliku jeśli istnieje
-        panel_data = load_panel_data()
-        if panel_data:
-            self.channel_id = panel_data.get("channel_id")
-            self.message_id = panel_data.get("message_id")
-        else:
-            self.channel_id = None
-            self.message_id = None
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         return interaction.user.id == self.author.id
@@ -130,7 +104,7 @@ class TicketSetupView(discord.ui.View):
             await interaction.response.send_modal(AddOptionModal(self))
 
         elif value == "send_embed":
-            await interaction.response.send_message("Mention the channel to send or update the ticket panel.", ephemeral=True)
+            await interaction.response.send_message("Mention the channel to send the ticket panel.", ephemeral=True)
 
             def check(m):
                 return m.author.id == interaction.user.id
@@ -149,12 +123,12 @@ class TicketSetupView(discord.ui.View):
                     return
 
                 self.channel = mentioned
-                await self.send_or_update_panel(interaction)
+                await self.send_panel(interaction)
 
             except asyncio.TimeoutError:
                 await interaction.followup.send("⏰ Timeout. Please try again.", ephemeral=True)
 
-    async def send_or_update_panel(self, interaction: discord.Interaction):
+    async def send_panel(self, interaction: discord.Interaction):
         global ticket_counter
 
         select = discord.ui.Select(
@@ -179,7 +153,7 @@ class TicketSetupView(discord.ui.View):
             overwrites = {
                 i.guild.default_role: discord.PermissionOverwrite(view_channel=False),
                 i.user: discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True),
-                role: discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True) if role else discord.PermissionOverwrite()
+                role: discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True)
             }
 
             category = i.guild.get_channel(TICKET_CATEGORY_ID)
@@ -209,31 +183,16 @@ class TicketSetupView(discord.ui.View):
         view = discord.ui.View()
         view.add_item(select)
 
-        # Jeśli mamy zapisane channel_id i message_id, spróbuj zaktualizować wiadomość
-        if self.channel_id and self.message_id:
-            try:
-                channel = self.bot.get_channel(self.channel_id)
-                if channel is None:
-                    # Kanał nie istnieje albo bot nie ma dostępu, wyślij nową wiadomość
-                    sent_message = await self.channel.send(embed=self.embed, view=view)
-                    self.message = sent_message
-                    save_panel_data(self.channel.id, sent_message.id)
-                else:
-                    msg = await channel.fetch_message(self.message_id)
-                    await msg.edit(embed=self.embed, view=view)
-                    self.message = msg
-            except Exception as e:
-                # W razie problemów (np. wiadomość usunięta), wyślij nową wiadomość
-                sent_message = await self.channel.send(embed=self.embed, view=view)
-                self.message = sent_message
-                save_panel_data(self.channel.id, sent_message.id)
-        else:
-            # Jeśli brak zapisanych danych - wyślij nową wiadomość i zapisz
-            sent_message = await self.channel.send(embed=self.embed, view=view)
-            self.message = sent_message
-            save_panel_data(self.channel.id, sent_message.id)
+        sent_message = await self.channel.send(embed=self.embed, view=view)
 
-        await interaction.followup.send("Ticket panel sent or updated!", ephemeral=True)
+        # Zapamiętujemy ID kanału, wiadomości i widok, aby można było odświeżyć panel później
+        ticket_cog = self.bot.get_cog("TicketSystem")
+        if ticket_cog:
+            ticket_cog.panel_message_id = sent_message.id
+            ticket_cog.panel_channel_id = sent_message.channel.id
+            ticket_cog.panel_view = self
+
+        await interaction.followup.send("Ticket panel sent!", ephemeral=True)
 
 class TicketView(discord.ui.View):
     def __init__(self, creator):
@@ -277,29 +236,32 @@ class CloseOptionsView(discord.ui.View):
 class TicketSystem(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
+        self.panel_message_id = None
+        self.panel_channel_id = None
+        self.panel_view = None
 
     @app_commands.command(name="ticketsetup", description="Create and send a custom ticket panel")
     async def ticketsetup(self, interaction: discord.Interaction):
         view = TicketSetupView(self.bot, interaction.user)
-
-        # Spróbuj załadować istniejący panel z pliku i zaktualizować go
-        panel_data = load_panel_data()
-        if panel_data:
-            channel_id = panel_data.get("channel_id")
-            message_id = panel_data.get("message_id")
-
-            channel = self.bot.get_channel(channel_id)
-            if channel:
-                try:
-                    message = await channel.fetch_message(message_id)
-                    await message.edit(embed=view.embed, view=view)
-                    await interaction.response.send_message("Panel zaktualizowany!", ephemeral=True)
-                    return
-                except:
-                    pass
-
-        # Jeśli brak panelu lub nie udało się edytować, wyślij nową wiadomość
         await interaction.response.send_message(embed=view.embed, view=view, ephemeral=True)
+
+    @app_commands.command(name="refreshpanel", description="Refresh the ticket panel (edit the message)")
+    async def refreshpanel(self, interaction: discord.Interaction):
+        if not self.panel_message_id or not self.panel_channel_id or not self.panel_view:
+            await interaction.response.send_message("❌ Nie znaleziono panelu do odświeżenia. Najpierw wyślij panel.", ephemeral=True)
+            return
+
+        channel = self.bot.get_channel(self.panel_channel_id)
+        if not channel:
+            await interaction.response.send_message("❌ Nie znaleziono kanału z panelem.", ephemeral=True)
+            return
+
+        try:
+            message = await channel.fetch_message(self.panel_message_id)
+            await message.edit(embed=self.panel_view.embed, view=self.panel_view)
+            await interaction.response.send_message("Panel został odświeżony.", ephemeral=True)
+        except Exception as e:
+            await interaction.response.send_message(f"❌ Błąd przy odświeżaniu panelu: {e}", ephemeral=True)
 
 async def setup(bot):
     await bot.add_cog(TicketSystem(bot))
