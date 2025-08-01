@@ -5,7 +5,7 @@ import asyncio
 import io
 from datetime import datetime
 
-EMOJI_DOT = "<a:BlueDot:1364125472539021352>"  # Replace with your emoji
+EMOJI_DOT = "<a:BlueDot:1364125472539021352>"
 
 ticket_counter = 0
 
@@ -113,6 +113,10 @@ class TicketSetupView(discord.ui.View):
 
     async def send_panel(self, interaction: discord.Interaction):
         global ticket_counter
+
+        if not self.options:
+            await interaction.followup.send("No options added. Add at least one option before sending the panel.", ephemeral=True)
+            return
 
         select = discord.ui.Select(
             placeholder="Select a ticket type",
