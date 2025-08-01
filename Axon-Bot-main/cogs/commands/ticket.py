@@ -3,9 +3,10 @@ from discord.ext import commands
 from discord import app_commands
 import asyncio
 import io
-from datetime import datetime
 
 EMOJI_DOT = "<a:BlueDot:1364125472539021352>"
+
+TICKET_CATEGORY_ID = 1336616593157001227  # tutaj wstaw ID kategorii, gdzie mają powstawać tickety
 
 ticket_counter = 0
 
@@ -79,8 +80,6 @@ class TicketSetupView(discord.ui.View):
         self.embed = discord.Embed(title="Ticket Panel", description="Select an option to open a ticket.", color=0x2B2D31)
         self.options = []
         self.channel = None
-        # ID kategorii, gdzie mają być tworzone tickety
-        self.category = None
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         return interaction.user.id == self.author.id
@@ -124,9 +123,6 @@ class TicketSetupView(discord.ui.View):
                     return
 
                 self.channel = mentioned
-                # Pobieramy kategorię z guild po ID (podaj tutaj ID kategorii)
-                self.category = interaction.guild.get_channel(1336616593157001227)
-
                 await self.send_panel(interaction)
 
             except asyncio.TimeoutError:
@@ -160,11 +156,16 @@ class TicketSetupView(discord.ui.View):
                 role: discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True)
             }
 
+            category = i.guild.get_channel(TICKET_CATEGORY_ID)
+            if category is None:
+                await i.response.send_message("❌ Ticket category not found. Contact admin.", ephemeral=True)
+                return
+
             ticket_channel = await i.guild.create_text_channel(
                 name=f"{selected_label.lower()}-{ticket_counter}",
                 overwrites=overwrites,
-                category=self.category,  # tutaj dodajemy kategorię
-                reason="New support ticket"
+                reason="New support ticket",
+                category=category
             )
 
             ticket_embed = discord.Embed(
