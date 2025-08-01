@@ -48,7 +48,7 @@ class AddOptionModal(discord.ui.Modal, title="Add Ticket Option"):
         self.view = view
 
         self.option_name = discord.ui.TextInput(label="Option Name", required=True)
-        self.option_emoji = discord.ui.TextInput(label="Emoji (e.g. :ticket: or emoji ID)", required=True)
+        self.option_emoji = discord.ui.TextInput(label="Emoji (e.g. 🎟️ or <:name:id>)", required=True)
         self.staff_role = discord.ui.TextInput(label="Staff Role ID", required=True)
 
         self.add_item(self.option_name)
@@ -56,7 +56,14 @@ class AddOptionModal(discord.ui.Modal, title="Add Ticket Option"):
         self.add_item(self.staff_role)
 
     async def on_submit(self, interaction: discord.Interaction):
-        emoji = discord.PartialEmoji.from_str(self.option_emoji.value)
+        try:
+            emoji = discord.PartialEmoji.from_str(self.option_emoji.value)
+            if not emoji.is_unicode_emoji() and not emoji.id:
+                raise ValueError("Invalid emoji format.")
+        except Exception:
+            await interaction.response.send_message("❌ Invalid emoji. Please use a valid Unicode emoji or custom emoji (format: <:name:id>).", ephemeral=True)
+            return
+
         self.view.options.append({
             "label": self.option_name.value,
             "emoji": emoji,
@@ -99,24 +106,29 @@ class TicketSetupView(discord.ui.View):
             await interaction.response.send_message("Mention the channel to send the ticket panel.", ephemeral=True)
 
             def check(m):
-                return m.author.id == interaction.user.id and m.channel == interaction.channel
+                return m.author.id == interaction.user.id
 
             try:
                 msg = await self.bot.wait_for("message", check=check, timeout=30)
-                if msg.channel_mentions:
-                    self.channel = msg.channel_mentions[0]
-                    await self.send_panel(interaction)
-                else:
-                    await interaction.followup.send("No channel mentioned.", ephemeral=True)
+                if not msg.channel_mentions:
+                    await interaction.followup.send("❌ No channel mentioned in your message.", ephemeral=True)
+                    return
+
+                mentioned = msg.channel_mentions[0]
+
+                permissions = mentioned.permissions_for(mentioned.guild.me)
+                if not permissions.send_messages:
+                    await interaction.followup.send("❌ I don't have permission to send messages in that channel.", ephemeral=True)
+                    return
+
+                self.channel = mentioned
+                await self.send_panel(interaction)
+
             except asyncio.TimeoutError:
-                await interaction.followup.send("Timeout. Please try again.", ephemeral=True)
+                await interaction.followup.send("⏰ Timeout. Please try again.", ephemeral=True)
 
     async def send_panel(self, interaction: discord.Interaction):
         global ticket_counter
-
-        if not self.options:
-            await interaction.followup.send("No options added. Add at least one option before sending the panel.", ephemeral=True)
-            return
 
         select = discord.ui.Select(
             placeholder="Select a ticket type",
