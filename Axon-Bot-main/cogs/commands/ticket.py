@@ -74,7 +74,7 @@ class AddOptionModal(discord.ui.Modal, title="Add Ticket Option"):
 
 class TicketSetupView(discord.ui.View):
     def __init__(self, bot, author):
-        super().__init__(timeout=300)
+        super().__init__(timeout=None)  # tu timeout None!
         self.bot = bot
         self.author = author
         self.embed = discord.Embed(title="Ticket Panel", description="Select an option to open a ticket.", color=0x2B2D31)
@@ -180,12 +180,11 @@ class TicketSetupView(discord.ui.View):
 
         select.callback = ticket_callback
 
-        view = discord.ui.View()
+        view = discord.ui.View(timeout=None)  # i tu timeout None!
         view.add_item(select)
 
         sent_message = await self.channel.send(embed=self.embed, view=view)
 
-        # Zapamiętujemy ID kanału, wiadomości i widok, aby można było odświeżyć panel później
         ticket_cog = self.bot.get_cog("TicketSystem")
         if ticket_cog:
             ticket_cog.panel_message_id = sent_message.id
@@ -196,7 +195,7 @@ class TicketSetupView(discord.ui.View):
 
 class TicketView(discord.ui.View):
     def __init__(self, creator):
-        super().__init__(timeout=None)
+        super().__init__(timeout=None)  # tu też timeout None!
         self.creator = creator
         self.claimed = False
 
@@ -215,7 +214,7 @@ class TicketView(discord.ui.View):
 
 class CloseOptionsView(discord.ui.View):
     def __init__(self, channel, creator):
-        super().__init__()
+        super().__init__(timeout=None)  # tu też timeout None!
         self.channel = channel
         self.creator = creator
 
