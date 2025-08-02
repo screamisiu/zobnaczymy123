@@ -26,7 +26,6 @@ class EmbedEditModal(discord.ui.Modal, title="Edit Ticket Embed"):
     def __init__(self, view):
         super().__init__()
         self.view = view
-
         self.title_input = discord.ui.TextInput(label="Embed Title", required=False)
         self.description_input = discord.ui.TextInput(label="Description", required=False, style=discord.TextStyle.paragraph)
         self.color_input = discord.ui.TextInput(label="Color (Hex, e.g. #3498db)", required=False)
@@ -42,16 +41,13 @@ class EmbedEditModal(discord.ui.Modal, title="Edit Ticket Embed"):
             color = int(self.color_input.value.replace("#", ""), 16) if self.color_input.value else 0x2B2D31
         except:
             color = 0x2B2D31
-
         embed = discord.Embed(
             title=self.title_input.value or "Support Ticket",
             description=self.description_input.value or "Select an option below to open a ticket.",
             color=color
         )
-
         if self.image_input.value:
             embed.set_image(url=self.image_input.value)
-
         self.view.embed = embed
         await interaction.response.edit_message(embed=embed, view=self.view)
 
@@ -59,7 +55,6 @@ class AddOptionModal(discord.ui.Modal, title="Add Ticket Option"):
     def __init__(self, view):
         super().__init__()
         self.view = view
-
         self.option_name = discord.ui.TextInput(label="Option Name", required=True)
         self.option_emoji = discord.ui.TextInput(label="Emoji (e.g. 🎟️ or <:name:id>)", required=True)
         self.staff_role = discord.ui.TextInput(label="Staff Role ID", required=True)
@@ -108,35 +103,26 @@ class TicketSetupView(discord.ui.View):
     )
     async def menu(self, interaction: discord.Interaction, select: discord.ui.Select):
         value = select.values[0]
-
         if value == "embed_edit":
             await interaction.response.send_modal(EmbedEditModal(self))
-
         elif value == "add_option":
             await interaction.response.send_modal(AddOptionModal(self))
-
         elif value == "send_embed":
             await interaction.response.send_message("Mention the channel to send the ticket panel.", ephemeral=True)
-
             def check(m):
                 return m.author.id == interaction.user.id
-
             try:
                 msg = await self.bot.wait_for("message", check=check, timeout=30)
                 if not msg.channel_mentions:
                     await interaction.followup.send("❌ No channel mentioned in your message.", ephemeral=True)
                     return
-
                 mentioned = msg.channel_mentions[0]
-
                 permissions = mentioned.permissions_for(mentioned.guild.me)
                 if not permissions.send_messages:
                     await interaction.followup.send("❌ I don't have permission to send messages in that channel.", ephemeral=True)
                     return
-
                 self.channel = mentioned
                 await self.send_panel(interaction)
-
             except asyncio.TimeoutError:
                 await interaction.followup.send("⏰ Timeout. Please try again.", ephemeral=True)
 
@@ -156,42 +142,34 @@ class TicketSetupView(discord.ui.View):
             selected_label = i.data["values"][0]
             ticket_counter += 1
             option = next((opt for opt in self.options if opt["label"] == selected_label), None)
-
             if option is None:
                 await i.response.send_message("Option not found.", ephemeral=True)
                 return
-
             role = i.guild.get_role(option["staff_role"])
             overwrites = {
                 i.guild.default_role: discord.PermissionOverwrite(view_channel=False),
                 i.user: discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True),
                 role: discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True)
             }
-
             ticket_channel = await i.guild.create_text_channel(
                 name=f"{selected_label.lower()}-{ticket_counter}",
                 overwrites=overwrites,
                 reason="New support ticket"
             )
-
             ticket_embed = discord.Embed(
                 title=f"{selected_label} Ticket",
                 description=f"{i.user.mention} created a ticket. {role.mention if role else ''}",
                 color=discord.Color.blurple()
             )
-
             view = TicketView(i.user)
             await ticket_channel.send(content=f"{i.user.mention} {role.mention if role else ''}", embed=ticket_embed, view=view)
             await i.response.send_message(f"Ticket created: {ticket_channel.mention}", ephemeral=True)
 
         select.callback = ticket_callback
-
         view = discord.ui.View(timeout=None)
         view.add_item(select)
-
         sent_message = await self.channel.send(embed=self.embed, view=view)
 
-        # Save panel data
         data = load_data()
         data["panel"] = {
             "guild_id": self.channel.guild.id,
@@ -205,7 +183,6 @@ class TicketSetupView(discord.ui.View):
             "options": self.options
         }
         save_data(data)
-
         await interaction.followup.send("Ticket panel sent!", ephemeral=True)
 
 class TicketView(discord.ui.View):
@@ -237,7 +214,6 @@ class CloseOptionsView(discord.ui.View):
     async def transcript(self, interaction: discord.Interaction, button: discord.ui.Button):
         messages = [f"{msg.created_at.strftime('%Y-%m-%d %H:%M:%S')} - {msg.author}: {msg.content}"
                     async for msg in self.channel.history(limit=None, oldest_first=True)]
-
         transcript_file = discord.File(io.BytesIO("\n".join(messages).encode()), filename=f"transcript-{self.channel.name}.txt")
         await interaction.user.send("Here is the ticket transcript:", file=transcript_file)
         await interaction.response.send_message("Transcript sent to your DMs.", ephemeral=True)
@@ -258,13 +234,18 @@ class TicketSystem(commands.Cog):
             channel = guild.get_channel(data["panel"]["channel_id"])
             if channel:
                 try:
-                    message = await channel.fetch_message(data["panel"]["message_id"])
-                    await message.edit(view=self.create_persistent_view(data["panel"]["options"]))
-                except discord.NotFound:
-                    sent_message = await channel.send(embed=self.create_embed_from_data(data["panel"]["embed"]),
-                                                      view=self.create_persistent_view(data["panel"]["options"]))
-                    data["panel"]["message_id"] = sent_message.id
-                    save_data(data)
+                    messages = [m async for m in channel.history(limit=50) if m.author == self.bot.user]
+                    for msg in messages:
+                        if msg.id != data["panel"]["message_id"]:
+                            await msg.delete()
+                    try:
+                        message = await channel.fetch_message(data["panel"]["message_id"])
+                        await message.edit(view=self.create_persistent_view(data["panel"]["options"]))
+                    except discord.NotFound:
+                        sent_message = await channel.send(embed=self.create_embed_from_data(data["panel"]["embed"]),
+                                                          view=self.create_persistent_view(data["panel"]["options"]))
+                        data["panel"]["message_id"] = sent_message.id
+                        save_data(data)
 
     def create_embed_from_data(self, embed_data):
         return discord.Embed(
@@ -286,30 +267,25 @@ class TicketSystem(commands.Cog):
             selected_label = i.data["values"][0]
             ticket_counter += 1
             option = next((opt for opt in options if opt["label"] == selected_label), None)
-
             if option is None:
                 await i.response.send_message("Option not found.", ephemeral=True)
                 return
-
             role = i.guild.get_role(option["staff_role"])
             overwrites = {
                 i.guild.default_role: discord.PermissionOverwrite(view_channel=False),
                 i.user: discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True),
                 role: discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True)
             }
-
             ticket_channel = await i.guild.create_text_channel(
                 name=f"{selected_label.lower()}-{ticket_counter}",
                 overwrites=overwrites,
                 reason="New support ticket"
             )
-
             ticket_embed = discord.Embed(
                 title=f"{selected_label} Ticket",
                 description=f"{i.user.mention} created a ticket. {role.mention if role else ''}",
                 color=discord.Color.blurple()
             )
-
             view_ticket = TicketView(i.user)
             await ticket_channel.send(content=f"{i.user.mention} {role.mention if role else ''}", embed=ticket_embed, view=view_ticket)
             await i.response.send_message(f"Ticket created: {ticket_channel.mention}", ephemeral=True)
