@@ -3,10 +3,22 @@ from discord.ext import commands
 from discord import app_commands
 import asyncio
 import io
+import json
+import os
+
+CONFIG_FILE = "ticket_config.json"
 
 EMOJI_DOT = "<a:BlueDot:1364125472539021352>"
 
-ticket_counter = 0
+def load_config():
+    if not os.path.exists(CONFIG_FILE):
+        return {}
+    with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+def save_config(config):
+    with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+        json.dump(config, f, indent=4)
 
 class EmbedEditModal(discord.ui.Modal, title="Edit Ticket Embed"):
     def __init__(self, view):
@@ -39,6 +51,18 @@ class EmbedEditModal(discord.ui.Modal, title="Edit Ticket Embed"):
             embed.set_image(url=self.image_input.value)
 
         self.view.embed = embed
+        # Update config for this guild
+        guild_id = str(interaction.guild.id)
+        config = load_config()
+        if guild_id not in config:
+            config[guild_id] = {}
+        config[guild_id]["embed"] = {
+            "title": embed.title,
+            "description": embed.description,
+            "color": embed.color.value,
+            "image": embed.image.url if embed.image else None
+        }
+        save_config(config)
         await interaction.response.edit_message(embed=embed, view=self.view)
 
 class AddOptionModal(discord.ui.Modal, title="Add Ticket Option"):
@@ -57,28 +81,64 @@ class AddOptionModal(discord.ui.Modal, title="Add Ticket Option"):
     async def on_submit(self, interaction: discord.Interaction):
         try:
             emoji = discord.PartialEmoji.from_str(self.option_emoji.value)
+            # Validate emoji
             if not emoji.is_unicode_emoji() and not emoji.id:
                 raise ValueError("Invalid emoji format.")
         except Exception:
             await interaction.response.send_message("❌ Invalid emoji. Please use a valid Unicode emoji or custom emoji (format: <:name:id>).", ephemeral=True)
             return
 
-        self.view.options.append({
+        option = {
             "label": self.option_name.value,
-            "emoji": emoji,
+            "emoji": {
+                "name": emoji.name,
+                "id": emoji.id,
+                "animated": emoji.animated
+            },
             "staff_role": int(self.staff_role.value)
-        })
+        }
+
+        self.view.options.append(option)
+
+        # Update config for this guild
+        guild_id = str(interaction.guild.id)
+        config = load_config()
+        if guild_id not in config:
+            config[guild_id] = {}
+        config[guild_id]["options"] = self.view.options
+        save_config(config)
+
+        # Rebuild embed with options (optional)
         await interaction.response.edit_message(content="Option added.", embed=self.view.embed, view=self.view)
 
 class TicketSetupView(discord.ui.View):
-    def __init__(self, bot, author, category_id):
+    def __init__(self, bot, author, guild_id):
         super().__init__(timeout=None)
         self.bot = bot
         self.author = author
-        self.embed = discord.Embed(title="Ticket Panel", description="Select an option to open a ticket.", color=0x2B2D31)
-        self.options = []
+        self.guild_id = str(guild_id)
+
+        # Load config for guild or use default
+        config = load_config()
+        guild_data = config.get(self.guild_id, {})
+
+        embed_data = guild_data.get("embed")
+        if embed_data:
+            embed = discord.Embed(
+                title=embed_data.get("title", "Ticket Panel"),
+                description=embed_data.get("description", "Select an option to open a ticket."),
+                color=embed_data.get("color", 0x2B2D31)
+            )
+            if embed_data.get("image"):
+                embed.set_image(url=embed_data["image"])
+            self.embed = embed
+        else:
+            self.embed = discord.Embed(title="Ticket Panel", description="Select an option to open a ticket.", color=0x2B2D31)
+
+        self.options = guild_data.get("options", [])
+        self.ticket_category_id = guild_data.get("ticket_category_id")  # can be None
+
         self.channel = None
-        self.category_id = category_id
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         return interaction.user.id == self.author.id
@@ -90,6 +150,7 @@ class TicketSetupView(discord.ui.View):
         options=[
             discord.SelectOption(label="Embed Edit", value="embed_edit", emoji="📝"),
             discord.SelectOption(label="Add Option", value="add_option", emoji="➕"),
+            discord.SelectOption(label="Set Ticket Category", value="set_category", emoji="🏷️"),
             discord.SelectOption(label="Send Embed", value="send_embed", emoji="📨"),
         ]
     )
@@ -102,7 +163,55 @@ class TicketSetupView(discord.ui.View):
         elif value == "add_option":
             await interaction.response.send_modal(AddOptionModal(self))
 
+        elif value == "set_category":
+            await interaction.response.send_message("Please mention the category or provide its ID where tickets should be created.", ephemeral=True)
+
+            def check(m):
+                return m.author.id == interaction.user.id and (len(m.channel_mentions) > 0 or m.content.isdigit() or len(m.channel_mentions) == 0)
+
+            try:
+                msg = await self.bot.wait_for("message", check=check, timeout=30)
+
+                category = None
+                # Try mention first
+                if msg.channel_mentions:
+                    category = msg.channel_mentions[0]
+                    if category.type != discord.ChannelType.category:
+                        await interaction.followup.send("❌ Mentioned channel is not a category.", ephemeral=True)
+                        return
+                else:
+                    # Try ID as integer
+                    try:
+                        cat_id = int(msg.content)
+                        cat = interaction.guild.get_channel(cat_id)
+                        if cat and cat.type == discord.ChannelType.category:
+                            category = cat
+                        else:
+                            await interaction.followup.send("❌ Invalid category ID or category not found.", ephemeral=True)
+                            return
+                    except:
+                        await interaction.followup.send("❌ Please mention a category or provide a valid category ID.", ephemeral=True)
+                        return
+
+                self.ticket_category_id = category.id
+
+                # Save to config
+                config = load_config()
+                if self.guild_id not in config:
+                    config[self.guild_id] = {}
+                config[self.guild_id]["ticket_category_id"] = self.ticket_category_id
+                save_config(config)
+
+                await interaction.followup.send(f"✅ Ticket category set to: {category.name}", ephemeral=True)
+
+            except asyncio.TimeoutError:
+                await interaction.followup.send("⏰ Timeout. Please try again.", ephemeral=True)
+
         elif value == "send_embed":
+            if not self.ticket_category_id:
+                await interaction.response.send_message("❌ Ticket category is not set. Please set it first using 'Set Ticket Category' option.", ephemeral=True)
+                return
+
             await interaction.response.send_message("Mention the channel to send the ticket panel.", ephemeral=True)
 
             def check(m):
@@ -128,20 +237,26 @@ class TicketSetupView(discord.ui.View):
                 await interaction.followup.send("⏰ Timeout. Please try again.", ephemeral=True)
 
     async def send_panel(self, interaction: discord.Interaction):
-        global ticket_counter
+        # Load ticket counter from config or start at 0
+        config = load_config()
+        guild_data = config.get(self.guild_id, {})
+        ticket_counter = guild_data.get("ticket_counter", 0)
 
         select = discord.ui.Select(
             placeholder="Select a ticket type",
             options=[
-                discord.SelectOption(label=opt["label"], value=opt["label"], emoji=opt["emoji"])
+                discord.SelectOption(label=opt["label"], value=opt["label"],
+                                     emoji=(f"<{'a:' if opt['emoji']['animated'] else ''}{opt['emoji']['name']}:{opt['emoji']['id']}>" 
+                                            if opt['emoji']['id'] else opt['emoji']['name']))
                 for opt in self.options
             ]
         )
 
         async def ticket_callback(i: discord.Interaction):
-            global ticket_counter
+            nonlocal ticket_counter
             selected_label = i.data["values"][0]
             ticket_counter += 1
+
             option = next((opt for opt in self.options if opt["label"] == selected_label), None)
 
             if option is None:
@@ -152,14 +267,13 @@ class TicketSetupView(discord.ui.View):
             overwrites = {
                 i.guild.default_role: discord.PermissionOverwrite(view_channel=False),
                 i.user: discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True),
-                role: discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True) if role else None
             }
-            # Remove None values from overwrites
-            overwrites = {k:v for k,v in overwrites.items() if v is not None}
+            if role:
+                overwrites[role] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True)
 
-            category = i.guild.get_channel(self.category_id)
-            if category is None:
-                await i.response.send_message("❌ Ticket category not found. Contact admin.", ephemeral=True)
+            category = i.guild.get_channel(self.ticket_category_id)
+            if category is None or category.type != discord.ChannelType.category:
+                await i.response.send_message("❌ Ticket category not found or invalid. Contact admin.", ephemeral=True)
                 return
 
             ticket_channel = await i.guild.create_text_channel(
@@ -179,6 +293,13 @@ class TicketSetupView(discord.ui.View):
             await ticket_channel.send(content=f"{i.user.mention} {role.mention if role else ''}", embed=ticket_embed, view=view)
             await i.response.send_message(f"Ticket created: {ticket_channel.mention}", ephemeral=True)
 
+            # Save updated ticket_counter
+            config = load_config()
+            if self.guild_id not in config:
+                config[self.guild_id] = {}
+            config[self.guild_id]["ticket_counter"] = ticket_counter
+            save_config(config)
+
         select.callback = ticket_callback
 
         view = discord.ui.View()
@@ -186,12 +307,18 @@ class TicketSetupView(discord.ui.View):
 
         sent_message = await self.channel.send(embed=self.embed, view=view)
 
-        # Save message, channel, and view for later refresh
+        # Save panel message and channel IDs for refresh, per guild
+        config = load_config()
+        if self.guild_id not in config:
+            config[self.guild_id] = {}
+        config[self.guild_id]["panel_message_id"] = sent_message.id
+        config[self.guild_id]["panel_channel_id"] = sent_message.channel.id
+        save_config(config)
+
+        # Save view in cog for runtime refresh (optional)
         ticket_cog = self.bot.get_cog("TicketSystem")
         if ticket_cog:
-            ticket_cog.panel_message_id = sent_message.id
-            ticket_cog.panel_channel_id = sent_message.channel.id
-            ticket_cog.panel_view = self
+            ticket_cog.panel_views[self.guild_id] = self
 
         await interaction.followup.send("Ticket panel sent!", ephemeral=True)
 
@@ -237,36 +364,45 @@ class CloseOptionsView(discord.ui.View):
 class TicketSystem(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        self.panel_message_id = None
-        self.panel_channel_id = None
-        self.panel_view = None
-        self.ticket_category_id = None  # dynamic category ID
+        self.panel_views = {}  # guild_id -> TicketSetupView instance
 
     @app_commands.command(name="ticketsetup", description="Create and send a custom ticket panel")
-    @app_commands.describe(category="Category where tickets will be created")
-    async def ticketsetup(self, interaction: discord.Interaction, category: discord.CategoryChannel):
-        self.ticket_category_id = category.id
-
-        view = TicketSetupView(self.bot, interaction.user, category_id=self.ticket_category_id)
+    async def ticketsetup(self, interaction: discord.Interaction):
+        guild_id = interaction.guild.id
+        view = TicketSetupView(self.bot, interaction.user, guild_id)
+        self.panel_views[str(guild_id)] = view
         await interaction.response.send_message(embed=view.embed, view=view, ephemeral=True)
 
     @app_commands.command(name="refreshpanel", description="Refresh the ticket panel (edit the message)")
     async def refreshpanel(self, interaction: discord.Interaction):
-        if not self.panel_message_id or not self.panel_channel_id or not self.panel_view:
+        guild_id = str(interaction.guild.id)
+        config = load_config()
+        guild_data = config.get(guild_id, {})
+
+        panel_message_id = guild_data.get("panel_message_id")
+        panel_channel_id = guild_data.get("panel_channel_id")
+
+        if not panel_message_id or not panel_channel_id:
             await interaction.response.send_message("❌ No panel found to refresh. Please send the panel first.", ephemeral=True)
             return
 
-        channel = self.bot.get_channel(self.panel_channel_id)
+        channel = self.bot.get_channel(panel_channel_id)
         if not channel:
             await interaction.response.send_message("❌ Panel channel not found.", ephemeral=True)
             return
 
         try:
-            message = await channel.fetch_message(self.panel_message_id)
-            await message.edit(embed=self.panel_view.embed, view=self.panel_view)
-            await interaction.response.send_message("Panel has been refreshed.", ephemeral=True)
+            message = await channel.fetch_message(panel_message_id)
+            view = self.panel_views.get(guild_id)
+            if not view:
+                # If view is not in memory, rebuild it from config
+                view = TicketSetupView(self.bot, interaction.user, interaction.guild.id)
+                self.panel_views[guild_id] = view
+
+            await message.edit(embed=view.embed, view=view)
+            await interaction.response.send_message("Panel refreshed.", ephemeral=True)
         except Exception as e:
-            await interaction.response.send_message(f"❌ Error refreshing panel: {e}", ephemeral=True)
+            await interaction.response.send_message(f"❌ Error while refreshing panel: {e}", ephemeral=True)
 
 async def setup(bot):
     await bot.add_cog(TicketSystem(bot))
