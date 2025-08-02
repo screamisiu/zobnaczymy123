@@ -3,8 +3,6 @@ from discord.ext import commands
 from discord import app_commands
 import asyncio
 
-EMOJI_DOT = "<a:BlueDot:1364125472539021352>"
-
 ticket_counter = 0
 
 # ====== MODALS ======
@@ -169,7 +167,7 @@ class TicketSetupView(discord.ui.View):
 
         sent_message = await self.channel.send(embed=self.embed, view=panel_view)
 
-        # Save in bot memory instead of JSON
+        # Zapisujemy w pamięci bota (RAM)
         if not hasattr(self.bot, "ticket_panels"):
             self.bot.ticket_panels = {}
         self.bot.ticket_panels[str(sent_message.id)] = {
@@ -218,11 +216,60 @@ class TicketSystem(commands.Cog):
         view = TicketSetupView(self.bot, interaction.user)
         await interaction.response.send_message(embed=view.embed, view=view, ephemeral=True)
 
+    @app_commands.command(name="restorepanels", description="Restore ticket panels by message IDs")
+    @app_commands.describe(message_ids="Space separated list of ticket panel message IDs")
+    async def restorepanels(self, interaction: discord.Interaction, message_ids: str):
+        ids = message_ids.split()
+        restored = 0
+        for message_id in ids:
+            try:
+                int_id = int(message_id)
+            except:
+                continue
+            # Szukamy panelu w pamięci, jeśli już jest - pomijamy
+            if hasattr(self.bot, "ticket_panels") and message_id in self.bot.ticket_panels:
+                restored += 1
+                continue
+
+            # Pobieramy wiadomość
+            panel_data = None
+            for guild in self.bot.guilds:
+                for channel in guild.text_channels:
+                    try:
+                        msg = await channel.fetch_message(int_id)
+                        # Jeśli wiadomość ma embed i select -> uznajemy, że to panel
+                        if msg and msg.components:
+                            # Odtwarzamy dane panelu
+                            # Niestety nie mamy oryginalnych danych, więc musimy odczytać embed
+                            embed = msg.embeds[0] if msg.embeds else None
+                            if embed is None:
+                                continue
+                            # Zakładamy brak opcji (bo nie mamy zapisu w pliku)
+                            # Aby działało, trzeba pamiętać, że panel przywrócony tak ma tylko embed, ale bez opcji wyboru ticketa
+                            # Można ewentualnie rozbudować parser embed albo wymagać podania dodatkowych danych
+                            self.bot.ticket_panels[message_id] = {
+                                "guild_id": guild.id,
+                                "channel_id": channel.id,
+                                "category_id": None,  # Nieznane po restarcie
+                                "options": [],  # Brak opcji przywróconych automatycznie
+                                "embed": {
+                                    "title": embed.title or "Ticket Panel",
+                                    "description": embed.description or "",
+                                    "color": embed.color.value if embed.color else 0x2B2D31
+                                }
+                            }
+                            restored += 1
+                            break
+                    except Exception:
+                        continue
+
+        await interaction.response.send_message(f"✅ Restored {restored} panels (in memory).", ephemeral=True)
+
     @app_commands.command(name="refreshpanel", description="Refresh ticket panel by message ID")
     async def refreshpanel(self, interaction: discord.Interaction, message_id: str):
         panels = self.bot.ticket_panels
         if message_id not in panels:
-            await interaction.response.send_message("❌ Panel not found in memory.", ephemeral=True)
+            await interaction.response.send_message("❌ Panel not found in memory. Use /restorepanels first.", ephemeral=True)
             return
         panel_data = panels[message_id]
         guild = self.bot.get_guild(panel_data["guild_id"])
@@ -246,13 +293,16 @@ class TicketSystem(commands.Cog):
             ticket_counter += 1
             selected_label = i.data["values"][0]
             option = next((o for o in panel_data["options"] if o["label"] == selected_label), None)
+            if not option:
+                await i.response.send_message("❌ Option not found.", ephemeral=True)
+                return
             role = i.guild.get_role(option["staff_role"])
             overwrites = {
                 i.guild.default_role: discord.PermissionOverwrite(view_channel=False),
                 i.user: discord.PermissionOverwrite(view_channel=True, send_messages=True),
                 role: discord.PermissionOverwrite(view_channel=True, send_messages=True)
             }
-            category = i.guild.get_channel(panel_data["category_id"])
+            category = i.guild.get_channel(panel_data["category_id"]) if panel_data["category_id"] else None
             ticket_channel = await i.guild.create_text_channel(
                 name=f"{selected_label.lower()}-{ticket_counter}",
                 overwrites=overwrites,
