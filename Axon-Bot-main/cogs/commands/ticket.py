@@ -74,7 +74,7 @@ class AddOptionModal(discord.ui.Modal, title="Add Ticket Option"):
 
 class TicketSetupView(discord.ui.View):
     def __init__(self, bot, author):
-        super().__init__(timeout=300)
+        super().__init__(timeout=None)
         self.bot = bot
         self.author = author
         self.embed = discord.Embed(title="Ticket Panel", description="Select an option to open a ticket.", color=0x2B2D31)
