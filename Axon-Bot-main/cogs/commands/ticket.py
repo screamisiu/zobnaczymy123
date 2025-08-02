@@ -2,25 +2,10 @@ import discord
 from discord.ext import commands
 from discord import app_commands
 import asyncio
-import io
-import json
-import os
 
 EMOJI_DOT = "<a:BlueDot:1364125472539021352>"
-TICKET_PANELS_FILE = "ticket_panels.json"
 
 ticket_counter = 0
-
-# ====== JSON LOAD/SAVE ======
-def load_panels():
-    if not os.path.exists(TICKET_PANELS_FILE):
-        return {}
-    with open(TICKET_PANELS_FILE, "r", encoding="utf-8") as f:
-        return json.load(f)
-
-def save_panels(data):
-    with open(TICKET_PANELS_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=4)
 
 # ====== MODALS ======
 class EmbedEditModal(discord.ui.Modal, title="Edit Ticket Embed"):
@@ -66,7 +51,7 @@ class AddOptionModal(discord.ui.Modal, title="Add Ticket Option"):
 
     async def on_submit(self, interaction: discord.Interaction):
         try:
-            emoji = discord.PartialEmoji.from_str(self.option_emoji.value)
+            discord.PartialEmoji.from_str(self.option_emoji.value)
         except Exception:
             await interaction.response.send_message("❌ Invalid emoji format.", ephemeral=True)
             return
@@ -76,7 +61,7 @@ class AddOptionModal(discord.ui.Modal, title="Add Ticket Option"):
             "emoji": self.option_emoji.value,
             "staff_role": int(self.staff_role.value)
         })
-        await interaction.response.edit_message(content="Option added.", embed=self.view.embed, view=self.view)
+        await interaction.response.edit_message(content="✅ Option added.", embed=self.view.embed, view=self.view)
 
 # ====== PANEL SETUP VIEW ======
 class TicketSetupView(discord.ui.View):
@@ -112,18 +97,15 @@ class TicketSetupView(discord.ui.View):
             await interaction.response.send_modal(AddOptionModal(self))
 
         elif value == "set_category":
-            await interaction.response.send_message("Please mention the category where tickets will be created.", ephemeral=True)
+            await interaction.response.send_message("📂 Please mention the category where tickets will be created.", ephemeral=True)
             def check(m): return m.author.id == interaction.user.id
             try:
                 msg = await self.bot.wait_for("message", check=check, timeout=30)
-                if not msg.channel_mentions and not msg.raw_channel_mentions:
-                    await interaction.followup.send("❌ No category mentioned.", ephemeral=True)
-                    return
                 if msg.channel_mentions:
                     self.category_id = msg.channel_mentions[0].id
+                    await interaction.followup.send(f"✅ Category set to <#{self.category_id}>", ephemeral=True)
                 else:
-                    self.category_id = msg.raw_channel_mentions[0]
-                await interaction.followup.send(f"✅ Category set to <#{self.category_id}>", ephemeral=True)
+                    await interaction.followup.send("❌ No category mentioned.", ephemeral=True)
             except asyncio.TimeoutError:
                 await interaction.followup.send("⏰ Timeout. Please try again.", ephemeral=True)
 
@@ -131,16 +113,15 @@ class TicketSetupView(discord.ui.View):
             if self.category_id is None:
                 await interaction.response.send_message("❌ Set a category first.", ephemeral=True)
                 return
-            await interaction.response.send_message("Mention the channel to send the ticket panel.", ephemeral=True)
+            await interaction.response.send_message("📨 Mention the channel to send the ticket panel.", ephemeral=True)
             def check(m): return m.author.id == interaction.user.id
             try:
                 msg = await self.bot.wait_for("message", check=check, timeout=30)
-                if not msg.channel_mentions:
+                if msg.channel_mentions:
+                    self.channel = msg.channel_mentions[0]
+                    await self.send_panel(interaction)
+                else:
                     await interaction.followup.send("❌ No channel mentioned.", ephemeral=True)
-                    return
-                mentioned = msg.channel_mentions[0]
-                self.channel = mentioned
-                await self.send_panel(interaction)
             except asyncio.TimeoutError:
                 await interaction.followup.send("⏰ Timeout. Please try again.", ephemeral=True)
 
@@ -159,7 +140,7 @@ class TicketSetupView(discord.ui.View):
             selected_label = i.data["values"][0]
             option = next((o for o in self.options if o["label"] == selected_label), None)
             if not option:
-                await i.response.send_message("Option not found.", ephemeral=True)
+                await i.response.send_message("❌ Option not found.", ephemeral=True)
                 return
             role = i.guild.get_role(option["staff_role"])
             overwrites = {
@@ -180,7 +161,7 @@ class TicketSetupView(discord.ui.View):
             )
             view = TicketView(i.user)
             await ticket_channel.send(embed=ticket_embed, view=view)
-            await i.response.send_message(f"Ticket created: {ticket_channel.mention}", ephemeral=True)
+            await i.response.send_message(f"✅ Ticket created: {ticket_channel.mention}", ephemeral=True)
 
         select.callback = ticket_callback
         panel_view = discord.ui.View()
@@ -188,9 +169,10 @@ class TicketSetupView(discord.ui.View):
 
         sent_message = await self.channel.send(embed=self.embed, view=panel_view)
 
-        # Save panel to JSON
-        panels = load_panels()
-        panels[str(sent_message.id)] = {
+        # Save in bot memory instead of JSON
+        if not hasattr(self.bot, "ticket_panels"):
+            self.bot.ticket_panels = {}
+        self.bot.ticket_panels[str(sent_message.id)] = {
             "guild_id": interaction.guild.id,
             "channel_id": self.channel.id,
             "category_id": self.category_id,
@@ -201,8 +183,7 @@ class TicketSetupView(discord.ui.View):
                 "color": self.embed.color.value
             }
         }
-        save_panels(panels)
-        await interaction.followup.send("✅ Ticket panel sent and saved!", ephemeral=True)
+        await interaction.followup.send("✅ Ticket panel sent and saved (in memory)!", ephemeral=True)
 
 # ====== TICKET VIEW ======
 class TicketView(discord.ui.View):
@@ -214,7 +195,7 @@ class TicketView(discord.ui.View):
     @discord.ui.button(label="📌 Claim", style=discord.ButtonStyle.primary)
     async def claim(self, interaction: discord.Interaction, button: discord.ui.Button):
         if self.claimed:
-            await interaction.response.send_message("Already claimed.", ephemeral=True)
+            await interaction.response.send_message("⚠️ This ticket is already claimed.", ephemeral=True)
         else:
             self.claimed = True
             await interaction.channel.send(f"{interaction.user.mention} claimed this ticket.")
@@ -229,6 +210,8 @@ class TicketView(discord.ui.View):
 class TicketSystem(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
+        if not hasattr(self.bot, "ticket_panels"):
+            self.bot.ticket_panels = {}
 
     @app_commands.command(name="ticketsetup", description="Create and send a custom ticket panel")
     async def ticketsetup(self, interaction: discord.Interaction):
@@ -237,9 +220,9 @@ class TicketSystem(commands.Cog):
 
     @app_commands.command(name="refreshpanel", description="Refresh ticket panel by message ID")
     async def refreshpanel(self, interaction: discord.Interaction, message_id: str):
-        panels = load_panels()
+        panels = self.bot.ticket_panels
         if message_id not in panels:
-            await interaction.response.send_message("❌ Panel not found.", ephemeral=True)
+            await interaction.response.send_message("❌ Panel not found in memory.", ephemeral=True)
             return
         panel_data = panels[message_id]
         guild = self.bot.get_guild(panel_data["guild_id"])
@@ -276,7 +259,7 @@ class TicketSystem(commands.Cog):
                 category=category
             )
             await ticket_channel.send(f"{i.user.mention} created a ticket. {role.mention if role else ''}")
-            await i.response.send_message(f"Ticket created: {ticket_channel.mention}", ephemeral=True)
+            await i.response.send_message(f"✅ Ticket created: {ticket_channel.mention}", ephemeral=True)
 
         select.callback = ticket_callback
         view = discord.ui.View()
