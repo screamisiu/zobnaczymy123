@@ -115,8 +115,8 @@ class TicketSystem(commands.Cog):
             description="Welcome to the ticket system. Click below to begin.", 
             color=0xfcd005
         )
-        embed.set_image(url='https://i.imgur.com/FoI5ITb.png')
-        embed.set_footer(text="Made By CodeX Development", icon_url=self.bot.user.avatar.url)
+        embed.set_image(url='https://i.imgur.com/dB0OPeg.png')
+        embed.set_footer(text="Made By Nimiec", icon_url=self.bot.user.avatar.url)
         embed.set_thumbnail(url=self.bot.user.avatar.url)
         await ctx.send(embed=embed, view=TicketButtonView())
 
@@ -145,7 +145,7 @@ class ReasonSelectView(View):
         options=[
             discord.SelectOption(label="Buy", value="buy", emoji="💸"),
             discord.SelectOption(label="Help", value="help", emoji="🛠️"),
-            discord.SelectOption(label="report", value="report", emoji="🚫"),
+            discord.SelectOption(label="Report", value="report", emoji="🚫"),
         ])
     async def select_callback(self, interaction: discord.Interaction, select: Select):
         # Fixed: Changed "TicketSetup" to "TicketSystem"
